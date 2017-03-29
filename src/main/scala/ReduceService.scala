@@ -14,12 +14,7 @@ import scala.collection.mutable
 
 object ReduceService {
   /*  rdd1.filter(r=>r.standardCategory.equals(ConstantUtils.category1)).top(100)(ReduceService.ordering.reverse).foreach(r=>println(r))
-      rdd1.filter(r=>r.standardCategory.equals(ConstantUtils.category2)).top(100)(ReduceService.ordering.reverse).foreach(r=>println(r))
-      rdd1.filter(r=>r.standardCategory.equals(ConstantUtils.category3)).top(100)(ReduceService.ordering.reverse).foreach(r=>println(r))
-      rdd1.filter(r=>r.standardCategory.equals(ConstantUtils.category4)).top(100)(ReduceService.ordering.reverse).foreach(r=>println(r))
-      rdd1.filter(r=>r.standardCategory.equals(ConstantUtils.category5)).top(100)(ReduceService.ordering.reverse).foreach(r=>println(r))
-      rdd1.filter(r=>r.standardCategory.equals(ConstantUtils.category6)).top(100)(ReduceService.ordering.reverse).foreach(r=>println(r))*/
-
+     */
   //.toDF().write.mode("append").jdbc("jdbc:mysql://192.168.10.86:3306/test", "product", MysqlUtils.getProperties())
 
   val spark = SparkUtils.getSpark()
@@ -27,7 +22,6 @@ object ReduceService {
   def getSpark:SparkSession ={
     spark
   }
-
 
   def MapFromResultToJDProduct(x:Result):JDProductModel = {
     val sparkID = ""
@@ -115,12 +109,35 @@ object ReduceService {
       JDCommentModel(rowKey, commentID, productID, userProvince, creationTime)
   }
 
-  def ReduceProvince(productArray:Array[JDProductModel]) = {
+
+
+  def param_11 =(c:(String,String)) =>{(Map(c._1->1),c._2)}
+  def param_12 = (c:(Map[String,Int],String),newC:(String,String)) => {
+    var _1:Map[String,Int] =null
+    var _2:String = null
+    //计算区域
+    if(c._1.keySet.contains(newC._1))
+    { val intValue:Int=c._1(newC._1)+1
+      _1 =c._1.+(newC._1->intValue)
+    }
+    else {_1 =c._1+(newC._1->1)}
+    //计算上架时间
+    if(c._2.compareTo(newC._2) > 0) _2 =newC._2 else _2 =c._2
+    (_1,_2)
+  }
+  def param_13 = (c:(Map[String,Int],String),newC:(Map[String,Int],String)) => {
+    var _1:Map[String,Int]= null
+    var _2:String=null
+    _1 = c._1.++(newC._1)
+    if(c._2.compareTo(newC._2) > 0) _2 =newC._2
+    else _2 =c._2
+
+    (_1,_2)
+  }
+  def ReduceProvinceAndTime(productArray:Array[JDProductModel]) = {
 
     val hBaseRDD=HBaseDao.scanTableBySparkAPI(ConstantUtils.hBaseJDCommentTable)
-
     val commentRDD = hBaseRDD.map(MapFromResultToJDCommentModel(_))
-
     val rdd=commentRDD.filter { r =>
       var flag =false
       for (product <- productArray) {
@@ -130,45 +147,29 @@ object ReduceService {
       }
       flag
     }
+    //计算区域人数+上架时间
+    val resultArray=rdd.map(r=>(r.productID,(r.userProvince,r.creationTime))).combineByKey(param_11,param_12,param_13).collect()
 
-    rdd.persist()
+    resultArray.foreach(r=>println(r))
 
-    /*//计算上架时间
-    val param = (c:String,newC:String) => {
-      if(c.compareTo(newC) > 0) newC else c
+    val newResultArray=resultArray.sortBy(r=>r._1)
+    var newProductArray =productArray.sortBy(r=>r.productID)
+
+    if(newResultArray.length != newProductArray.length) {
+      println("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx错误:")
     }
-    rdd.map(r=>(r.productID,r.creationTime)).combineByKey(c=>c,param,param).collect()
-
-    //计算区域人数
-
-    val param_p1 = (c:Map[String,Int],newC:String) => {
-      if(c.keySet.contains(newC))
-      {
-        val intValue:Int=c(newC)+1
-        c.+(newC->intValue)
+    val i =0
+    while(i<newProductArray.length) {
+      if(newProductArray.apply(i).productID.equals( newResultArray.apply(i)._1)){
+        newProductArray.apply(i).productSalesTime = newResultArray.apply(i)._2._2
+        newProductArray.apply(i).userProvince = newResultArray.apply(i)._2._1.mkString(" ")
       }
-      else c.+(newC->1)
     }
-
-    val param_p2 = (c:Map[String,Int],newC:Map[String,Int]) => {
-      c.++(newC)
-
-    }*/
-
-  //  rdd.map(r=>(r.productID,r.userProvince)).combineByKey(c=>Map(c,1),param_p1,param_p2)
-
-
-
-
-
-    rdd.unpersist()
+    //rdd.unpersist()
+    spark.sparkContext.parallelize(newProductArray).toDS().write.mode("append").jdbc("jdbc:mysql://192.168.10.86:3306/test", "product", MysqlUtils.getProperties())
   }
-
-
-  def printHotsell(productModelArray:Array[JDProductModel])= {
-
+  def ReduceHotsell(productModelArray:Array[JDProductModel])= {
     val hotsellRDD = MapService.getJDHotSellRDD(HBaseDao.scanTableBySparkAPI(ConstantUtils.hBaseJDHotsellTable))
-    //过滤
     val rdd =hotsellRDD.filter{r=>
       var flag =false
       for(product<-productModelArray){
@@ -182,7 +183,10 @@ object ReduceService {
     rdd.toDF().write.mode("append").jdbc("jdbc:mysql://192.168.10.86:3306/test", "hotsell", MysqlUtils.getProperties())
   }
 
-
+  def main(args: Array[String]): Unit = {
+    ReduceProvinceAndTime(productArray)
+    ReduceHotsell(productArray)
+  }
 
 
 
